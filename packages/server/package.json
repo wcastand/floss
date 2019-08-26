@@ -1,0 +1,16 @@
+{
+  "name": "@floss/server",
+  "private": true,
+  "version": "1.0.0",
+  "dependencies": {
+    "@floss/utils": "*",
+    "chalk": "^2.4.2",
+    "dotenv": "^8.1.0",
+    "koa": "^2.8.1",
+    "koa-bodyparser": "^4.2.1",
+    "koa-logger": "^3.2.1",
+    "koa-proxy": "^1.0.0-alpha.3",
+    "koa-router": "^7.4.0",
+    "uuid": "^3.3.3"
+  }
+}
