@@ -6,6 +6,8 @@
     "dev": "node server.js"
   },
   "dependencies": {
-    "@floss/core": "*"
+    "@floss/core": "*",
+    "react": "^16.9.0",
+    "react-dom": "^16.9.0"
   }
 }

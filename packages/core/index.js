@@ -1,11 +1,16 @@
 require('dotenv').config()
 const fs = require('fs')
+const React = require('react')
 const chalk = require('chalk')
-const { resolve, relative } = require('path')
+const babelcore = require('@babel/core')
+const { resolve, join, relative } = require('path')
+const Readable = require('stream').Readable
+const { renderToString } = require('react-dom/server')
 
 const { rollup, watch } = require('rollup')
 const del = require('rollup-plugin-delete')
 const babel = require('rollup-plugin-babel')
+const commonjs = require('rollup-plugin-commonjs')
 const noderesolve = require('rollup-plugin-node-resolve')
 
 const Koa = require('koa')
@@ -15,6 +20,7 @@ const logger = require('koa-logger')
 const Router = require('koa-router')
 
 const { preaddir, isPortTaken } = require('./utils')
+const { htmlTemplate } = require('./ssr')
 
 const createConfig = (path, outputPath) => ({
   input: path,
@@ -22,10 +28,13 @@ const createConfig = (path, outputPath) => ({
     del({ targets: outputPath }),
     noderesolve(),
     babel({
+      runtimeHelpers: true,
       exclude: 'node_modules/**',
-      presets: [['@babel/env', { modules: false }]],
+      presets: [['@babel/env', { modules: false }], '@babel/preset-react'],
     }),
+    commonjs({ include: 'node_modules/**' }),
   ],
+  external: ['react', 'prop-types'],
 })
 
 const bundleFactory = (rootPath, outputdir, mode = 'dev') => async ({ path, name }) => {
@@ -35,14 +44,43 @@ const bundleFactory = (rootPath, outputdir, mode = 'dev') => async ({ path, name
     .split('/')
     .filter(f => f !== 'index')
     .join('/')
-  const outputPath = resolve(outputdir, name)
-  const config = createConfig(path, outputPath)
+  const outputPath = name.includes('.jsx')
+    ? resolve(outputdir, name).replace('.jsx', '.js')
+    : resolve(outputdir, name)
+  let config = createConfig(path, outputPath)
+  if (name.includes('.jsx')) {
+    config = {
+      ...config,
+      input: 'root',
+      plugins: [
+        {
+          resolveId: id => (id === 'root' ? id : null),
+          load: id =>
+            id === 'root'
+              ? Promise.resolve(`
+          const { hydrate } = ReactDOM
+          import App from './${relative(process.cwd(), path)}'
+          const app = document.getElementById('app')
+          hydrate(React.createElement(App, {}), app)
+          `)
+              : null,
+        },
+        ...config.plugins,
+      ],
+    }
+  }
   const outputConfig = {
     output: {
       file: outputPath,
-      format: 'cjs',
+      format: name.includes('.jsx') ? 'iife' : 'cjs',
+      name: 'bundle',
+      globals: {
+        react: 'React',
+        'react-dom': 'ReactDOM',
+      },
     },
   }
+
   switch (mode) {
     case 'dev': {
       const watcher = await watch({
@@ -52,62 +90,118 @@ const bundleFactory = (rootPath, outputdir, mode = 'dev') => async ({ path, name
           chokidar: { ignoreInitial: true },
         },
       })
-      return [outputPath, finalPath || '/', watcher]
+      return [outputPath, finalPath || '/', watcher, path]
     }
     case 'start': {
       const bundle = await rollup(config)
       await bundle.write(outputConfig)
-      return [outputPath, finalPath || '/', null]
+      return [outputPath, finalPath || '/', null, null]
     }
     case 'build': {
       const bundle = await rollup(config)
       await bundle.write(outputConfig)
-      return [outputPath, finalPath || '/', null]
+      return [outputPath, finalPath || '/', null, null]
     }
   }
 }
 
 const createLambda = (createBundle, router) => async lambdaPath => {
   let tlambda
+  const { name } = lambdaPath
   const [handlerPath, route, watcher] = await createBundle(lambdaPath)
 
   let lport = Math.floor(Math.random() * 10000 + 1)
   while (await isPortTaken(lport)) lport = Math.floor(Math.random() * 10000 + 1)
   return new Promise(resolve => {
     if (watcher)
-      watcher.on('event', event => {
+      watcher.on('event', async event => {
         if (event.code === 'BUNDLE_END') {
           if (tlambda) tlambda.close()
-          delete require.cache[require.resolve(handlerPath)]
-          const mod = require(handlerPath)
-          const method = (mod.method || 'get').toUpperCase()
-
           const lambda = new Koa()
           lambda.use(bodyparser())
-          if (mod.handler) lambda.use(mod.handler)
-          const registeredR = router.route(route || '/')
-          if (!!registeredR && !registeredR.methods.includes(method))
-            router.stack = router.stack.filter(layer => layer.name !== (route || '/'))
-          if (!router.route(route || '/'))
-            router[method.toLowerCase()](
-              route,
-              route || '/',
-              proxy({
-                url: `http://localhost:${lport}`,
-              }),
-            )
 
-          const isFirst = !!tlambda
-          tlambda = lambda.listen(lport, () => {
-            if (isFirst) {
-              console.log(chalk.green('[RELOAD] '), chalk.blue(`[${method}]`), `${route || '/'}`)
-            } else {
-              console.log('')
-              console.log(chalk.green('[NEW LAMBDA]'), chalk.blue('[PORT]'), `${lport}`)
-              console.log(chalk.green('[NEW ROUTE] '), chalk.blue(`[${method}]`), `${route || '/'}`)
+          if (name.includes('.jsx')) {
+            // const ssr = renderToString(
+            //   React.createElement(require(handlerPath)(React), { context: {} }),
+            // )
+
+            lambda.use(ctx => {
+              ctx.body = `
+              <!DOCTYPE html>
+              <html>
+              <head>
+                  <meta charset="utf-8">
+                  <title>React SSR</title>
+                  <script crossorigin src="https://unpkg.com/react@16/umd/react.production.min.js"></script>
+                  <script crossorigin src="https://unpkg.com/react-dom@16/umd/react-dom.production.min.js"></script>
+              </head>
+              <body>
+                  <div id="app"></div>
+                  <script src="${`${route}/bundle.js`}"></script>
+              </body>
+              </html>
+              `
+              // ctx.body = htmlTemplate(mod, ssr)
+            })
+
+            if (!router.route(route || '/')) {
+              router.get(
+                route,
+                route || '/',
+                proxy({
+                  url: `http://localhost:${lport}`,
+                }),
+              )
+              router.get(
+                `${route}/bundle.js`,
+                ctx => (ctx.body = fs.readFileSync(handlerPath.replace(name, 'bundle.js'))),
+              )
             }
-            resolve(tlambda)
-          })
+            const isFirst = !!tlambda
+            tlambda = lambda.listen(lport, () => {
+              if (isFirst)
+                console.log(chalk.green('[RELOAD] '), chalk.blue(`[GET]`), `${route || '/'}`)
+              else {
+                console.log('')
+                console.log(chalk.green('[NEW LAMBDA]'), chalk.blue('[PORT]'), `${lport}`)
+                console.log(chalk.green('[NEW ROUTE] '), chalk.blue(`[GET]`), `${route || '/'}`)
+              }
+              resolve(tlambda)
+            })
+          } else {
+            delete require.cache[require.resolve(handlerPath)]
+            const mod = require(handlerPath)
+            const method = (mod.method || 'get').toUpperCase()
+
+            if (mod.handler) lambda.use(mod.handler)
+            const registeredR = router.route(route || '/')
+            if (!!registeredR && !registeredR.methods.includes(method))
+              router.stack = router.stack.filter(layer => layer.name !== (route || '/'))
+            if (!router.route(route || '/'))
+              router[method.toLowerCase()](
+                route,
+                route || '/',
+                proxy({
+                  url: `http://localhost:${lport}`,
+                }),
+              )
+
+            const isFirst = !!tlambda
+            tlambda = lambda.listen(lport, () => {
+              if (isFirst)
+                console.log(chalk.green('[RELOAD] '), chalk.blue(`[${method}]`), `${route || '/'}`)
+              else {
+                console.log('')
+                console.log(chalk.green('[NEW LAMBDA]'), chalk.blue('[PORT]'), `${lport}`)
+                console.log(
+                  chalk.green('[NEW ROUTE] '),
+                  chalk.blue(`[${method}]`),
+                  `${route || '/'}`,
+                )
+              }
+              resolve(tlambda)
+            })
+          }
         }
         // event.code can be one of:
         //   START        — the watcher is (re)starting
