@@ -1,0 +1,11 @@
+{
+  "name": "@example/simple",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "@floss/core": "*"
+  }
+}
