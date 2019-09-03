@@ -1,0 +1,16 @@
+{
+  "name": "@example/serv",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "@floss/node-lambda": "*",
+    "@floss/react-lambda": "*",
+    "@floss/server": "*",
+    "node-fetch": "^2.6.0",
+    "react": "^16.9.0",
+    "react-dom": "^16.9.0"
+  }
+}

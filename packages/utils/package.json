@@ -2,5 +2,13 @@
   "name": "@floss/utils",
   "private": true,
   "version": "1.0.0",
-  "main": "index.js"
+  "main": "index.js",
+  "dependencies": {
+    "@babel/core": "^7.5.5",
+    "@babel/preset-env": "^7.5.5",
+    "@babel/preset-react": "^7.0.0",
+    "@babel/runtime": "^7.5.5",
+    "@babel/plugin-transform-runtime": "^7.5.5",
+    "@babel/runtime-corejs3": "^7.5.5"
+  }
 }

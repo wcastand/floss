@@ -6,5 +6,5 @@ export default () => {
     const timer = setInterval(() => sC(c + 1), 1000)
     return () => clearInterval(timer)
   }, [c])
-  return <div onClick={() => sC(c + 1)}>Counter counted: {c}</div>
+  return <div onClick={() => sC(c + 1)}>Counter: {c}</div>
 }
